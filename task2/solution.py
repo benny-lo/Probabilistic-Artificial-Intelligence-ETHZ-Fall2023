@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 
 from util import draw_reliability_diagram, cost_function, setup_seeds, calc_calibration_curve
 
-EXTENDED_EVALUATION = False
+EXTENDED_EVALUATION = True
 """
 Set `EXTENDED_EVALUATION` to `True` in order to generate additional plots on validation data.
 """
@@ -168,6 +168,7 @@ class SWAGInference(object):
         # Calibration, prediction, and other attributes
         # TODO(2): create additional attributes, e.g., for calibration
         self._prediction_threshold = None  # this is an example, feel free to be creative
+        self._temperature = 0.72
 
     def update_swag(self) -> None:
         """
@@ -313,6 +314,7 @@ class SWAGInference(object):
             for (batch_xs, ) in loader: 
                 prediction.append(self.network(batch_xs))
             prediction = torch.cat(prediction)
+            prediction /= self._temperature # temperature scaling
             prediction = torch.softmax(prediction, dim=-1)
             per_model_sample_predictions.append(prediction)
 
