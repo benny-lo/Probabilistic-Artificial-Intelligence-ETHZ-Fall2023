@@ -128,8 +128,9 @@ class BO_algo():
             the optimal solution of the problem
         """
         # TODO: Return your predicted safe optimum of f.
-        index = np.argmax(self.sampled_f.flatten())
-        return self.sampled_x.flatten()[index]
+        self.sampled_f = [f if self.sampled_v[i] <= SAFETY_THRESHOLD else -1 for i, f in enumerate(self.sampled_f)]
+        index = np.argmax(self.sampled_f)
+        return self.sampled_x[index]
 
 
     def plot(self, plot_recommendation: bool = True):
