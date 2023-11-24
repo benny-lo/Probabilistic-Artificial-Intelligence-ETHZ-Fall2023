@@ -18,12 +18,14 @@ class BO_algo():
     def __init__(self):
         """Initializes the algorithm with a parameter configuration."""
         # TODO: Define all relevant class members for your BO algorithm here.
-        self.gp_f = GaussianProcessRegressor(kernel=math.sqrt(0.5)*RBF(length_scale=10) + WhiteKernel(noise_level=0.15**2), normalize_y=True)
-        self.gp_v = GaussianProcessRegressor(kernel=math.sqrt(math.sqrt(2))*RBF(length_scale=10) + DotProduct(sigma_0=0.0) + WhiteKernel(noise_level=0.0001**2))
-        self.sampled_x = np.ndarray(shape=(1,))
-        self.sampled_f = np.ndarray(shape=(1,))
-        self.sampled_v = np.ndarray(shape=(1,))
+        self.gp_f = GaussianProcessRegressor(kernel=Matern(nu=2.5) + WhiteKernel(noise_level=0.15**2), normalize_y=True)
+        self.gp_v = GaussianProcessRegressor(kernel=Matern(nu=2.5) + DotProduct(sigma_0=0.0) + WhiteKernel(noise_level=0.0001**2), normalize_y=True)
+        self.sampled_x = []
+        self.sampled_f = []
+        self.sampled_v = []
         self.penalty = 2
+        self.distance_penalty = 2
+        self.start_penalty = 5
 
     def next_recommendation(self):
         """
@@ -86,8 +88,11 @@ class BO_algo():
         """
         x = np.atleast_2d(x)
         # TODO: Implement the acquisition function you want to optimize.
-        v, v_std = self.gp_v.predict(x, return_std=True)
-        return self.gp_f.predict(x) - self.penalty * np.max(v + v_std, 0)
+        f_mean, f_std = self.gp_f.predict(x, return_std=True)
+        v_mean, v_std = self.gp_v.predict(x, return_std=True)
+
+        return (f_mean - 0.5 * f_std) - self.penalty * np.max(v_mean - SAFETY_THRESHOLD + 2 * v_std, 0) - \
+            self.distance_penalty * (abs(x - self.sampled_x[0]) >= 1.5)        
 
     def add_data_point(self, x: float, f: float, v: float):
         """
@@ -105,7 +110,9 @@ class BO_algo():
         # TODO: Add the observed data {x, f, v} to your model.
         self.sampled_x = np.append(self.sampled_x, x)
         self.sampled_f = np.append(self.sampled_f, f)
-        self.sampled_v = np.append(self.sampled_v, v - SAFETY_THRESHOLD)
+        self.sampled_v = np.append(self.sampled_v, v)
+
+        self.sampled_x = np.clip(self.sampled_x, DOMAIN[0][0], DOMAIN[0][1])
 
         self.gp_f.fit(self.sampled_x.reshape(-1, 1), self.sampled_f)
         self.gp_v.fit(self.sampled_x.reshape(-1, 1), self.sampled_v)
@@ -121,11 +128,8 @@ class BO_algo():
             the optimal solution of the problem
         """
         # TODO: Return your predicted safe optimum of f.
-        index = 0
-        for i, p in enumerate(zip(self.sampled_f, self.sampled_v)):
-            if p[1] <= 0 and p[0] > self.sampled_f[index]:
-                index = i 
-        return self.sampled_x[index]
+        index = np.argmax(self.sampled_f.flatten())
+        return self.sampled_x.flatten()[index]
 
 
     def plot(self, plot_recommendation: bool = True):
