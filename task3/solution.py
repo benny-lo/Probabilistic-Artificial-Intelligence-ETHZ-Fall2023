@@ -23,9 +23,8 @@ class BO_algo():
         self.sampled_x = []
         self.sampled_f = []
         self.sampled_v = []
-        self.penalty = 2
+        self.penalty = 2.5
         self.distance_penalty = 2
-        self.start_penalty = 5
 
     def next_recommendation(self):
         """
@@ -40,7 +39,7 @@ class BO_algo():
         # using functions f and v.
         # In implementing this function, you may use
         # optimize_acquisition_function() defined below.
-        return self.optimize_acquisition_function()
+        return np.clip(self.optimize_acquisition_function(), DOMAIN[0][0], DOMAIN[0][1])
     
     def optimize_acquisition_function(self):
         """Optimizes the acquisition function defined below (DO NOT MODIFY).
@@ -92,7 +91,7 @@ class BO_algo():
         v_mean, v_std = self.gp_v.predict(x, return_std=True)
 
         return (f_mean - 0.5 * f_std) - self.penalty * np.max(v_mean - SAFETY_THRESHOLD + 2 * v_std, 0) - \
-            self.distance_penalty * (abs(x - self.sampled_x[0]) >= 1.5)        
+            self.distance_penalty * (abs(x[0] - self.sampled_x[0]) >= 1.5)        
 
     def add_data_point(self, x: float, f: float, v: float):
         """
@@ -111,8 +110,6 @@ class BO_algo():
         self.sampled_x = np.append(self.sampled_x, x)
         self.sampled_f = np.append(self.sampled_f, f)
         self.sampled_v = np.append(self.sampled_v, v)
-
-        self.sampled_x = np.clip(self.sampled_x, DOMAIN[0][0], DOMAIN[0][1])
 
         self.gp_f.fit(self.sampled_x.reshape(-1, 1), self.sampled_f)
         self.gp_v.fit(self.sampled_x.reshape(-1, 1), self.sampled_v)
