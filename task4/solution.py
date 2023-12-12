@@ -24,10 +24,24 @@ class NeuralNetwork(nn.Module):
         # with a variable number of hidden layers and hidden units.
         # Here you should define layers which your network will use.
 
+        layers = []
+        layers.append(nn.Linear(input_dim, hidden_size))
+        layers.append(nn.LeakyReLU())
+
+        for _ in range(hidden_layers): 
+            layers.append(nn.Linear(hidden_size, hidden_size))
+            layers.append(nn.LeakyReLU())
+        
+        layers.append(nn.Linear(hidden_size, output_dim))
+        layers.append(nn.LeakyReLU())
+
+        self.model = nn.Sequential(*layers)
+
     def forward(self, s: torch.Tensor) -> torch.Tensor:
         # TODO: Implement the forward pass for the neural network you have defined.
-        pass
-    
+        return self.model(s)
+
+
 class Actor:
     def __init__(self,hidden_size: int, hidden_layers: int, actor_lr: float,
                 state_dim: int = 3, action_dim: int = 1, device: torch.device = torch.device('cpu')):
@@ -49,7 +63,10 @@ class Actor:
         '''
         # TODO: Implement this function which sets up the actor network. 
         # Take a look at the NeuralNetwork class in utils.py. 
-        pass
+        self.policy_network = NeuralNetwork(self.state_dim, 2*self.action_dim, self.hidden_size, self.hidden_layers, None)
+        #self.policy_network.to(self.device)
+
+        self.optimizer = optim.AdamW(self.policy_network.parameters(), self.actor_lr)
 
     def clamp_log_std(self, log_std: torch.Tensor) -> torch.Tensor:
         '''
@@ -67,15 +84,31 @@ class Actor:
                                 otherwise sample from the policy distribution.
         Returns:
         :param action: torch.Tensor, action the policy returns for the state.
-        :param log_prob: log_probability of the the action.
+        :param log_prob: log_probability of the action.
         '''
         assert state.shape == (3,) or state.shape[1] == self.state_dim, 'State passed to this method has a wrong shape'
         action , log_prob = torch.zeros(state.shape[0]), torch.ones(state.shape[0])
         # TODO: Implement this function which returns an action and its log probability.
         # If working with stochastic policies, make sure that its log_std are clamped 
         # using the clamp_log_std function.
-        assert action.shape == (state.shape[0], self.action_dim) and \
-            log_prob.shape == (state.shape[0], self.action_dim), 'Incorrect shape for action or log_prob.'
+
+        output = self.policy_network(state)
+        mean = output[:,0]
+        if deterministic: return torch.tanh(mean), torch.tensor([0.0])
+
+        std = torch.exp(self.clamp_log_std(output[:,1]))
+        distribution = Normal(mean, std)
+
+        #print("get_action_and_log_prob", mean.shape, std.shape)
+
+        sample = distribution.rsample()
+
+        action = torch.tanh(sample)
+        log_prob = distribution.log_prob(sample)
+        log_prob -= torch.log(torch.clamp(1 - action * action, 1e-30))
+
+        #assert action.shape == (state.shape[0], self.action_dim) and \
+        #    log_prob.shape == (state.shape[0], self.action_dim), 'Incorrect shape for action or log_prob.'
         return action, log_prob
 
 
@@ -95,7 +128,12 @@ class Critic:
     def setup_critic(self):
         # TODO: Implement this function which sets up the critic(s). Take a look at the NeuralNetwork 
         # class in utils.py. Note that you can have MULTIPLE critic networks in this class.
-        pass
+        self.current_network = NeuralNetwork(self.state_dim + self.action_dim, 1, self.hidden_size, self.hidden_layers, None)
+        self.target_network = NeuralNetwork(self.state_dim + self.action_dim, 1, self.hidden_size, self.hidden_layers, None)
+        #self.current_network.to(self.device)
+        #self.target_network.to(self.device)
+
+        self.optimizer = optim.AdamW(self.current_network.parameters(), self.critic_lr)
 
 class TrainableParameter:
     '''
@@ -125,7 +163,8 @@ class Agent:
         self.max_buffer_size = 100000
         # If your PC possesses a GPU, you should be able to use it for training, 
         # as self.device should be 'cuda' in that case.
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        #self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")
         print("Using device: {}".format(self.device))
         self.memory = ReplayBuffer(self.min_buffer_size, self.max_buffer_size, self.device)
         
@@ -134,7 +173,20 @@ class Agent:
     def setup_agent(self):
         # TODO: Setup off-policy agent with policy and critic classes. 
         # Feel free to instantiate any other parameters you feel you might need.   
-        pass
+        self.lr = 3e-4
+        self.discount = 0.99
+        self.hidden_layers = 2
+        self.hidden_size = 256
+        self.tau = 0.005
+        self.entropy_target = -1
+
+        self.actor = Actor(self.hidden_size, self.hidden_layers, self.lr, device=self.device)
+        self.critic1 = Critic(self.hidden_size, self.hidden_layers, self.lr, device=self.device)
+        self.critic2 = Critic(self.hidden_size, self.hidden_layers, self.lr, device=self.device)
+        self.critic_target_update(self.critic1.current_network, self.critic1.target_network, 0.0, False)
+        self.critic_target_update(self.critic2.current_network, self.critic2.target_network, 0.0, False)
+        self.alpha = TrainableParameter(1.0, self.lr, True, device=self.device)
+
 
     def get_action(self, s: np.ndarray, train: bool) -> np.ndarray:
         """
@@ -144,7 +196,10 @@ class Agent:
         :return: np.ndarray,, action to apply on the environment, shape (1,)
         """
         # TODO: Implement a function that returns an action from the policy for the state s.
-        action = np.random.uniform(-1, 1, (1,))
+        action, _ = self.actor.get_action_and_log_prob(torch.from_numpy(s).unsqueeze(dim=0), not train)
+        action = action.detach().numpy()
+
+        #print("get_action: ", action.shape)
 
         assert action.shape == (1,), 'Incorrect action shape.'
         assert isinstance(action, np.ndarray ), 'Action dtype must be np.ndarray' 
@@ -159,7 +214,7 @@ class Agent:
         :param object: object containing trainable parameters and an optimizer
         '''
         object.optimizer.zero_grad()
-        loss.mean().backward()
+        loss.backward()
         object.optimizer.step()
 
     def critic_target_update(self, base_net: NeuralNetwork, target_net: NeuralNetwork, 
@@ -192,10 +247,32 @@ class Agent:
         batch = self.memory.sample(self.batch_size)
         s_batch, a_batch, r_batch, s_prime_batch = batch
 
-        # TODO: Implement Critic(s) update here.
+        
+        # TODO: Implement Critic(s) update here
+        actor_action_now, log_prob_now = self.actor.get_action_and_log_prob(s_batch, False)
+        actor_action_next, log_prob_next = self.actor.get_action_and_log_prob(s_prime_batch, False)
+
+        #print("train_agent", actor_action_next.unsqueeze(dim=1).shape, s_prime_batch.shape)
+
+        val1 = self.critic1.current_network(torch.cat((s_batch, a_batch), dim=1))
+        next_val1 = self.critic1.target_network(torch.cat((s_prime_batch, actor_action_next.unsqueeze(dim=1)), dim=1))
+
+        val2 = self.critic2.current_network(torch.cat((s_batch, a_batch), dim=1))
+        next_val2 = self.critic2.target_network(torch.cat((s_prime_batch, actor_action_next.unsqueeze(dim=1)), dim=1))
+
+        y = r_batch + self.discount * (torch.min(next_val1, next_val2) - self.alpha.get_param() * log_prob_next)
+        #y2 = r_batch + self.discount * (torch.min(next_val1, next_val2) - self.alpha.get_param() * log_prob_next)
+
+        self.run_gradient_update_step(self.critic1, nn.functional.mse_loss(val1, y.detach()))
+        self.run_gradient_update_step(self.critic2, nn.functional.mse_loss(val2, y.detach()))
 
         # TODO: Implement Policy update here
+        val1_policy = self.critic1.current_network(torch.cat((s_batch, actor_action_now.unsqueeze(dim=1)), dim=1))
+        val2_policy = self.critic2.current_network(torch.cat((s_batch, actor_action_now.unsqueeze(dim=1)), dim=1))
+        self.run_gradient_update_step(self.actor, torch.mean(torch.min(val1_policy, val2_policy) - self.alpha.get_param() * log_prob_now)) 
 
+        self.critic_target_update(self.critic1.current_network, self.critic1.target_network, self.tau, True)
+        self.critic_target_update(self.critic2.current_network, self.critic2.target_network, self.tau, True)
 
 # This main function is provided here to enable some basic testing. 
 # ANY changes here WON'T take any effect while grading.
