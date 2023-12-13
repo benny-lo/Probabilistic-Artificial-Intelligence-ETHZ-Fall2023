@@ -105,7 +105,7 @@ class Actor:
 
         action = torch.tanh(sample)
         log_prob = distribution.log_prob(sample)
-        log_prob -= torch.log(torch.clamp(1 - action * action, 1e-30))
+        log_prob -= torch.log(torch.clamp(1 - action * action, 1e-10))
 
         #assert action.shape == (state.shape[0], self.action_dim) and \
         #    log_prob.shape == (state.shape[0], self.action_dim), 'Incorrect shape for action or log_prob.'
@@ -196,10 +196,9 @@ class Agent:
         :return: np.ndarray,, action to apply on the environment, shape (1,)
         """
         # TODO: Implement a function that returns an action from the policy for the state s.
-        action, _ = self.actor.get_action_and_log_prob(torch.from_numpy(s).unsqueeze(dim=0), not train)
-        action = action.detach().numpy()
-
-        #print("get_action: ", action.shape)
+        with torch.no_grad(): 
+            action, _ = self.actor.get_action_and_log_prob(torch.from_numpy(s).unsqueeze(dim=0), not train)
+        action = action.numpy()
 
         assert action.shape == (1,), 'Incorrect action shape.'
         assert isinstance(action, np.ndarray ), 'Action dtype must be np.ndarray' 
@@ -249,27 +248,28 @@ class Agent:
 
         
         # TODO: Implement Critic(s) update here
-        actor_action_now, log_prob_now = self.actor.get_action_and_log_prob(s_batch, False)
-        actor_action_next, log_prob_next = self.actor.get_action_and_log_prob(s_prime_batch, False)
-
-        #print("train_agent", actor_action_next.unsqueeze(dim=1).shape, s_prime_batch.shape)
-
+        with torch.no_grad(): 
+            current_alpha = self.alpha.get_param()
+            actor_action_next, log_prob_next = self.actor.get_action_and_log_prob(s_prime_batch, False)
+            _, log_prob_now_no_grad = self.actor.get_action_and_log_prob(s_batch, False)
+            next_val1 = self.critic1.target_network(torch.cat((s_prime_batch, actor_action_next.unsqueeze(dim=1)), dim=1))
+            next_val2 = self.critic2.target_network(torch.cat((s_prime_batch, actor_action_next.unsqueeze(dim=1)), dim=1))
+            y = r_batch + self.discount * (torch.min(next_val1, next_val2) - current_alpha * log_prob_next)
+        
         val1 = self.critic1.current_network(torch.cat((s_batch, a_batch), dim=1))
-        next_val1 = self.critic1.target_network(torch.cat((s_prime_batch, actor_action_next.unsqueeze(dim=1)), dim=1))
-
         val2 = self.critic2.current_network(torch.cat((s_batch, a_batch), dim=1))
-        next_val2 = self.critic2.target_network(torch.cat((s_prime_batch, actor_action_next.unsqueeze(dim=1)), dim=1))
 
-        y = r_batch + self.discount * (torch.min(next_val1, next_val2) - self.alpha.get_param() * log_prob_next)
-        #y2 = r_batch + self.discount * (torch.min(next_val1, next_val2) - self.alpha.get_param() * log_prob_next)
 
-        self.run_gradient_update_step(self.critic1, nn.functional.mse_loss(val1, y.detach()))
-        self.run_gradient_update_step(self.critic2, nn.functional.mse_loss(val2, y.detach()))
+        self.run_gradient_update_step(self.critic1, nn.functional.mse_loss(val1, y))
+        self.run_gradient_update_step(self.critic2, nn.functional.mse_loss(val2, y))
 
         # TODO: Implement Policy update here
+        actor_action_now, log_prob_now = self.actor.get_action_and_log_prob(s_batch, False)
         val1_policy = self.critic1.current_network(torch.cat((s_batch, actor_action_now.unsqueeze(dim=1)), dim=1))
         val2_policy = self.critic2.current_network(torch.cat((s_batch, actor_action_now.unsqueeze(dim=1)), dim=1))
-        self.run_gradient_update_step(self.actor, torch.mean(torch.min(val1_policy, val2_policy) - self.alpha.get_param() * log_prob_now)) 
+        self.run_gradient_update_step(self.actor, -torch.mean(torch.min(val1_policy, val2_policy) - current_alpha * log_prob_now)) 
+
+        self.run_gradient_update_step(self.alpha, -torch.mean(self.alpha.get_param() * (log_prob_now_no_grad + self.entropy_target)))
 
         self.critic_target_update(self.critic1.current_network, self.critic1.target_network, self.tau, True)
         self.critic_target_update(self.critic2.current_network, self.critic2.target_network, self.tau, True)
@@ -283,7 +283,7 @@ if __name__ == '__main__':
 
     # You may set the save_video param to output the video of one of the evalution episodes, or 
     # you can disable console printing during training and testing by setting verbose to False.
-    save_video = False
+    save_video = True
     verbose = True
 
     agent = Agent()
