@@ -33,7 +33,6 @@ class NeuralNetwork(nn.Module):
             layers.append(nn.LeakyReLU())
         
         layers.append(nn.Linear(hidden_size, output_dim))
-        layers.append(nn.LeakyReLU())
 
         self.model = nn.Sequential(*layers)
 
@@ -175,7 +174,7 @@ class Agent:
         # Feel free to instantiate any other parameters you feel you might need.   
         self.lr = 3e-4
         self.discount = 0.99
-        self.hidden_layers = 2
+        self.hidden_layers = 4
         self.hidden_size = 256
         self.tau = 0.005
         self.entropy_target = -1
